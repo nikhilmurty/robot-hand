@@ -1,6 +1,4 @@
 from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerResult
-# import mediapipe.tasks.python.solutions.drawing_utils as mp_drawing
-# import mediapipe.tasks.python.solutions.hands as mp_hands
 import mediapipe as mp
 from mediapipe.tasks import python 
 from mediapipe.tasks.python import vision
@@ -8,6 +6,7 @@ import cv2
 import threading
 import time
 import os
+import numpy as np
 
 class FingerCapture:
     modelpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
@@ -80,6 +79,45 @@ class FingerCapture:
             print("error in processing, exiting")
             self.isRunning = False
 
+    def draw_landmarks_on_image(self, annotated_image, detection_result):
+        height, width, _ = annotated_image.shape
+
+        # Define hand connections: (start_index, end_index)
+        connections = [
+            # Thumb
+            (0, 1), (1, 2), (2, 3), (3, 4),
+            # Index Finger
+            (0, 5), (5, 6), (6, 7), (7, 8),
+            # Middle Finger
+            (0, 9), (9, 10), (10, 11), (11, 12),
+            # Ring Finger
+            (0, 13), (13, 14), (14, 15), (15, 16),
+            # Pinky
+            (0, 17), (17, 18), (18, 19), (19, 20),
+            # Knuckle connections (connecting MCP joints)
+            (5, 9), (9, 13), (13, 17)
+        ]
+
+        if detection_result.hand_landmarks:
+            for hand_landmarks in detection_result.hand_landmarks:
+                # Convert normalized coordinates to pixel coordinates
+                coords = []
+                for landmark in hand_landmarks:
+                    cx = int(landmark.x * width)
+                    cy = int(landmark.y * height)
+                    coords.append((cx, cy))
+
+                # Draw connection lines (Red)
+                for start_idx, end_idx in connections:
+                    if start_idx < len(coords) and end_idx < len(coords):
+                        cv2.line(annotated_image, coords[start_idx], coords[end_idx], (0, 0, 255), 2)
+
+                # Draw landmark points (Green)
+                for coord in coords:
+                    cv2.circle(annotated_image, coord, 5, (0, 255, 0), -1)
+
+        return annotated_image
+
     def display_callback(self):
         try:
             while self.isRunning:
@@ -99,9 +137,11 @@ class FingerCapture:
                     latest_result = self.result
                     
                 if latest_result and latest_result.hand_landmarks:
-                    # Loop through every detected hand (usually just 1)
-                    # annotated_image = draw_landmarks_on_image(image.numpy_view(), latest_result)
-                    pass
+                    # Convert BGR frame to RGB, draw landmarks, and convert back
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    annotated_rgb = self.draw_landmarks_on_image(rgb_frame, latest_result)
+                    frame = cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR)
+                    
                 cv2.imshow('Video Feed', frame)
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
