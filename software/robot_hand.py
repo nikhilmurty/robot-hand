@@ -1,4 +1,6 @@
 from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerResult
+# import mediapipe.tasks.python.solutions.drawing_utils as mp_drawing
+# import mediapipe.tasks.python.solutions.hands as mp_hands
 import mediapipe as mp
 from mediapipe.tasks import python 
 from mediapipe.tasks.python import vision
@@ -12,8 +14,14 @@ class FingerCapture:
     
 
     def __init__(self, num_hands):
-        self.cameraThread = threading.Thread(target=self.tracking_callback, daemon=True)
-        self.cap = cv2.VideoCapture(0)
+        self.isRunning = False
+        self.trackingThread = threading.Thread(target=self.processing_callback, daemon=True)
+        self.frameLock = threading.Lock()
+        self.currentFrame = None
+        self.result_lock = threading.Lock()
+        self.result = None
+
+        self.cap = cv2.VideoCapture(1)
 
         # set up hand model
         self.HandLandmarker = mp.tasks.vision.HandLandmarker
@@ -28,13 +36,20 @@ class FingerCapture:
             result_callback=self.print_result)
         
     def print_result(self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
-        pass
+        with self.result_lock:
+            self.result = result
+
+    def start(self):
+        self.isRunning = True
+        self.trackingThread.start()
+        self.display_callback()
+
     
-    def tracking_callback(self):
+    def processing_callback(self):
         try:
             with self.HandLandmarker.create_from_options(self.LandmarkerOptions) as landmarker:
                 consecutive_failures = 0
-                while self.cap.isOpened():
+                while self.isRunning:
                     ret, frame = self.cap.read()
                     
                     #watch to see if camera isn't reading
@@ -48,9 +63,10 @@ class FingerCapture:
                             break
                         continue
                     consecutive_failures = 0
-
-                    #capture the video image
-                    cv2.imshow('Video Feed', frame)
+                    
+                    # lock thread and copy over current frame back to main
+                    with self.frameLock:
+                        self.currentFrame = frame.copy()
 
                     #convert image to mediapipe image
                     rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -60,19 +76,44 @@ class FingerCapture:
                     timestamp = int(time.time()*1000)
                     landmarker.detect_async(mp_image, timestamp)
 
-                    # Press 'q' to exit the loop
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        print("Quit key pressed, stopping capture")
-                        break
+        except Exception as e: 
+            print("error in processing, exiting")
+            self.isRunning = False
 
-        except KeyboardInterrupt: 
-            print("Terminal shortcut pressed, exiting")
+    def display_callback(self):
+        try:
+            while self.isRunning:
+                frame = None
+
+                # get the current frame
+                with self.frameLock:
+                    if self.currentFrame is not None:
+                        frame = self.currentFrame.copy()
+
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
+
+                # 1. Safely grab the latest data payload
+                with self.result_lock:
+                    latest_result = self.result
+                    
+                if latest_result and latest_result.hand_landmarks:
+                    # Loop through every detected hand (usually just 1)
+                    # annotated_image = draw_landmarks_on_image(image.numpy_view(), latest_result)
+                    pass
+                cv2.imshow('Video Feed', frame)
+
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    print("Quit key pressed, stopping capture.")
+                    break
 
         finally: 
             self.cap.release()
             cv2.destroyAllWindows()
+            self.isRunning = False
 
 
 if __name__ == "__main__":
-    test = FingerCapture(1)
-    test.tracking_callback()
+    hands = FingerCapture(1)
+    hands.start()
