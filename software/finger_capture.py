@@ -63,7 +63,7 @@ class FingerCapture:
         with self.result_lock:
             self.result = result
 
-    def start(self):
+    def run(self):
         self.isRunning = True
         self.trackingThread.start()
         self.robotThread.start()
@@ -231,4 +231,4 @@ class FingerCapture:
 
 if __name__ == "__main__":
     hands = FingerCapture(1)
-    hands.start()
+    hands.run()
