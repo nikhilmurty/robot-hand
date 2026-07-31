@@ -67,10 +67,12 @@ class FingerCapture:
         self.isRunning = True
         self.trackingThread.start()
         self.robotThread.start()
+        self.hand_robot.start()
         self.display_callback()
 
         self.robotThread.join(timeout=2.0)
         self.trackingThread.join(timeout=2.0)
+        self.hand_robot.stop()
 
     
     def processing_callback(self):
@@ -113,13 +115,11 @@ class FingerCapture:
     def robot_callback(self):
         """Handles the control of the robot hand
         """
-        thumb = (1,4)
-        pointer = (5,8)
-        middle = (9,12)
-        ring = (13,16)
-        pinky = (17,20)
-
-        self.hand_robot.enable(1)
+        thumb = (0, 2, 4)
+        pointer = (5, 6, 8)
+        middle = (9, 10, 12)
+        ring = (13, 14, 16)
+        pinky = (17, 18, 20)
 
         try:
             while(self.isRunning):
@@ -132,17 +132,23 @@ class FingerCapture:
                 
                 #get landmarks and get finger angle
                 first_hand_landmarks = latest_result.hand_landmarks[0]
+                thumb_angle   = self.get_finger_angle(first_hand_landmarks, thumb)
                 pointer_angle = self.get_finger_angle(first_hand_landmarks, pointer)
+                middle_angle  = self.get_finger_angle(first_hand_landmarks, middle)
+                ring_angle    = self.get_finger_angle(first_hand_landmarks, ring)
+                pinky_angle   = self.get_finger_angle(first_hand_landmarks, pinky)
+
+                positions = [thumb_angle, pointer_angle, middle_angle, ring_angle, pinky_angle]
+
+                print(f"Positions: {positions}")
 
                 #convert to motor andle and set
-                motor_angle = self.hand_robot.finger2motor(pointer_angle)
-                self.hand_robot.setPosition(1, motor_angle)
+                self.hand_robot.setHandPosition(positions)
 
                 time.sleep(0.1)
 
         finally:
-            self.hand_robot.disable(1)
-            self.hand_robot.close_port()
+            print("Stopping hand controller")
 
 
 
@@ -150,25 +156,28 @@ class FingerCapture:
 
     
     def get_finger_angle(self, hand_landmarks, indexes):
-        knuckle_idx = indexes[0]
-        tip_idx = indexes[1]
+        mcp_idx, pip_idx, tip_idx = indexes
 
-        wrist = np.array([hand_landmarks[0].x, hand_landmarks[0].y, hand_landmarks[0].z])
-        knuckle = np.array([hand_landmarks[knuckle_idx].x, hand_landmarks[knuckle_idx].y, hand_landmarks[knuckle_idx].z])
+        mcp = np.array([hand_landmarks[mcp_idx].x, hand_landmarks[mcp_idx].y, hand_landmarks[mcp_idx].z])
+        pip = np.array([hand_landmarks[pip_idx].x, hand_landmarks[pip_idx].y, hand_landmarks[pip_idx].z])
         tip = np.array([hand_landmarks[tip_idx].x, hand_landmarks[tip_idx].y, hand_landmarks[tip_idx].z])
 
-        # Calculate vectors
-        v_palm = knuckle - wrist
-        v_finger = tip - knuckle
+        # Calculate vectors: proximal (MCP -> PIP) and distal (PIP -> Tip)
+        v_proximal = pip - mcp
+        v_distal = tip - pip
         
         # Dot product formula: cos(theta) = (u . v) / (|u| * |v|)
-        dot_product = np.dot(v_palm, v_finger)
-        norm_palm = np.linalg.norm(v_palm)
-        norm_finger = np.linalg.norm(v_finger)
+        dot_product = np.dot(v_proximal, v_distal)
+        norm_proximal = np.linalg.norm(v_proximal)
+        norm_distal = np.linalg.norm(v_distal)
         
-        cos_angle = np.clip(dot_product / (norm_palm * norm_finger), -1.0, 1.0)
+        denom = norm_proximal * norm_distal
+        if denom == 0 or np.isnan(denom):
+            return 0.0
+
+        cos_angle = np.clip(dot_product / denom, -1.0, 1.0)
         angle_deg = np.degrees(np.arccos(cos_angle))
-        return angle_deg
+        return 0.0 if np.isnan(angle_deg) else angle_deg
 
     def draw_landmarks_on_image(self, annotated_image, detection_result):
         height, width, _ = annotated_image.shape

@@ -3,9 +3,10 @@ Handles control of 5 dynamixel motors that control the fingers on a tension driv
 """
 from dynamixel_sdk import *
 import time
+import threading
 
 class Finger:
-    def __init__(self, name, motor_id, min = -75, max = 90):
+    def __init__(self, name, motor_id, min = 0, max = 120):
         self.name = name
         self.motor_id = motor_id
         self.open_pos = 0
@@ -44,6 +45,7 @@ class HandController:
 
     ADDR_ACTUAL_POSITION        = 132
     ADDR_ACTUAL_CURRENT         = 126
+    ADDR_ACTUAL_VELOCITY        = 128
 
     CURRENT_POSITION_OPERATION  = 5         #Current based position
     MAX_CURRENT                 = 300       #current cap until backdrivable
@@ -65,29 +67,34 @@ class HandController:
         self.portHandler = PortHandler(DEVICENAME)
         self.packetHandler = PacketHandler(self.PROTOCOL_VERSION)
 
-
         if not self.portHandler.openPort() or not self.portHandler.setBaudRate(self.BAUDRATE):
             print("Failed to open port or set baudrate. Check your DEVICENAME!")
             quit()
 
         #create the hand
         self.hand = {
-            "THUMB" : Finger("THUMB", self.THUMB, -30,90),
-            "POINTER" : Finger("POINTER", self.POINTER),
-            "MIDDLE" : Finger("MIDDLE", self.MIDDLE),
-            "RING" : Finger("RING", self.RING),
-            "PINKY" : Finger("PINKY", self.PINKY)
+            "THUMB"   : Finger("THUMB", self.THUMB, 15, 75),
+            "POINTER" : Finger("POINTER", self.POINTER, 0, 120),
+            "MIDDLE"  : Finger("MIDDLE", self.MIDDLE, 0, 120),
+            "RING"    : Finger("RING", self.RING, 0, 120),
+            "PINKY"   : Finger("PINKY", self.PINKY, 0, 120)
         }
-
-        self.groupSyncWrite = GroupSyncWrite(self.portHandler, self.packetHandler, self.ADDR_TARGET_POSITION, 4)
-        self.groupSyncRead  = GroupSyncRead(self.portHandler, self.packetHandler, self.ADDR_ACTUAL_POSITION, 4)
 
         self.auto_tension()
         print("Finished tensioning")
 
+        self.groupSyncWrite = GroupSyncWrite(self.portHandler, self.packetHandler, self.ADDR_TARGET_POSITION, 4)
+        self.groupSyncRead  = GroupSyncRead(self.portHandler, self.packetHandler, self.ADDR_ACTUAL_CURRENT, 10)
+
+        for finger in self.hand.values():
+            self.groupSyncRead.addParam(finger.motor_id)
+
+        self.hand_thread = threading.Thread(target=self.run, daemon=True)
 
     def close_port(self):
-        self.packetHandler.write1ByteTxRx(self.portHandler, 1, self.ADDR_TORQUE_ENABLE, 0)
+        for finger in self.hand.values():
+            self.disable(finger.motor_id)
+
         self.portHandler.closePort()
 
     def enable(self, motor):
@@ -102,9 +109,78 @@ class HandController:
         """Reads values coming from dynamixels, saves to the motor classes
         """
 
+        dxl_comm_result = self.groupSyncRead.txRxPacket()
+        if dxl_comm_result != COMM_SUCCESS:
+            print(f"Sync read failed: {self.packetHandler.getTxRxResult(dxl_comm_result)}")
+            return
+
+        for finger in self.hand.values():
+            motor = finger.motor_id
+
+            if self.groupSyncRead.isAvailable(motor, self.ADDR_ACTUAL_POSITION, 4):
+                # Retrieve the 4-byte position data
+                curr = self.groupSyncRead.getData(motor, self.ADDR_ACTUAL_CURRENT, 2)
+                if curr > 32767:
+                    curr -= 65536
+
+                vel = self.groupSyncRead.getData(motor, self.ADDR_ACTUAL_VELOCITY, 4)
+                if vel > 2147483647:
+                    vel -= 4294967296
+
+                pos = self.groupSyncRead.getData(motor, self.ADDR_ACTUAL_POSITION, 4)
+                # Convert from unsigned to signed 32-bit integer
+                if pos > 2147483647:
+                    pos -= 4294967296
+                
+                finger.update_values(pos, curr, vel)
+            else:
+                print(f"[ID:{motor}] groupSyncRead data not available")
+
     def write_hand(self):
         """writes values to hands
         """
+
+        self.groupSyncWrite.clearParam()
+
+        for finger in self.hand.values():
+            motor  = finger.motor_id
+            target = int(finger.target_pos)
+
+            dxl_addparam_result = self.groupSyncWrite.addParam(motor, target.to_bytes(4, 'little', signed=True))
+
+            if not dxl_addparam_result:
+                print(f"addParam failed for joint #{motor}")
+                return
+        
+
+        dxl_comm_result = self.groupSyncWrite.txPacket()
+        if dxl_comm_result != COMM_SUCCESS:
+            print(f"Sync write failed: {self.packetHandler.getTxRxResult(dxl_comm_result)}")
+            return
+
+    def start(self):
+        self.is_running = True
+        self.hand_thread.start()
+
+    def stop(self):
+        self.is_running = False
+        self.hand_thread.join(timeout=2.0)
+    def run(self):
+        try:
+            while self.is_running:
+                self.read_hand()
+                self.write_hand()
+
+                time.sleep(0.01)
+
+        except Exception as e:
+            print(f"Error in main loop: {e}")
+
+        finally:
+            self.close_port()
+                
+
+
 
     def auto_tension(self):
         """Auto tensions every finger and gets max and min positions
@@ -167,9 +243,9 @@ class HandController:
                 time.sleep(0.1)
                 
 
-            #Disable Motor
-            self.disable(motor)
-                
+            #move finger to open position
+            finger.target_pos = finger.open_pos
+            self.setPosition(motor, finger.open_pos)
             print(f"{name} is tensioned!")
 
 
@@ -188,12 +264,13 @@ class HandController:
         Args:
             positions (array of ints): an array containing all the joints starting from thumb (motor enumeration starts at 1)
         """
-        for i, position in enumerate(positions):
-            angle = self.finger2motor(position)
-            self.setPosition(i+1, position)
+        for i, finger in enumerate(self.hand.values()):
+            position = finger.calculate_motor_angle(positions[i])
 
 
 
 if __name__ == "__main__":
     motor = HandController()
     i = 0
+    motor.close_port()
+    print("Port closed")
