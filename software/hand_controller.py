@@ -73,7 +73,7 @@ class HandController:
 
         #create the hand
         self.hand = {
-            "THUMB"   : Finger("THUMB", self.THUMB, 15, 75),
+            "THUMB"   : Finger("THUMB", self.THUMB, 0, 75),
             "POINTER" : Finger("POINTER", self.POINTER, 0, 120),
             "MIDDLE"  : Finger("MIDDLE", self.MIDDLE, 0, 120),
             "RING"    : Finger("RING", self.RING, 0, 120),

@@ -115,11 +115,11 @@ class FingerCapture:
     def robot_callback(self):
         """Handles the control of the robot hand
         """
-        thumb = (0, 2, 4)
-        pointer = (5, 6, 8)
-        middle = (9, 10, 12)
-        ring = (13, 14, 16)
-        pinky = (17, 18, 20)
+        thumb   = (0, 2, 4, 15)
+        pointer = (0, 5, 8, 15)
+        middle  = (0, 9, 12, 8)
+        ring    = (0, 13, 16, 4)
+        pinky   = (0, 17, 20, 6)
 
         try:
             while(self.isRunning):
@@ -140,7 +140,7 @@ class FingerCapture:
 
                 positions = [thumb_angle, pointer_angle, middle_angle, ring_angle, pinky_angle]
 
-                print(f"Positions: {positions}")
+                # print(f"Positions: {positions}")
 
                 #convert to motor andle and set
                 self.hand_robot.setHandPosition(positions)
@@ -150,34 +150,35 @@ class FingerCapture:
         finally:
             print("Stopping hand controller")
 
-
-
-
-
     
     def get_finger_angle(self, hand_landmarks, indexes):
-        mcp_idx, pip_idx, tip_idx = indexes
+        wrist_idx, mcp_idx, tip_idx, offset = indexes
 
+        wrist = np.array([hand_landmarks[wrist_idx].x, hand_landmarks[wrist_idx].y, hand_landmarks[wrist_idx].z])
         mcp = np.array([hand_landmarks[mcp_idx].x, hand_landmarks[mcp_idx].y, hand_landmarks[mcp_idx].z])
-        pip = np.array([hand_landmarks[pip_idx].x, hand_landmarks[pip_idx].y, hand_landmarks[pip_idx].z])
         tip = np.array([hand_landmarks[tip_idx].x, hand_landmarks[tip_idx].y, hand_landmarks[tip_idx].z])
 
-        # Calculate vectors: proximal (MCP -> PIP) and distal (PIP -> Tip)
-        v_proximal = pip - mcp
-        v_distal = tip - pip
+        # Calculate vectors: v_palm (Wrist -> MCP) and v_finger (MCP -> Tip)
+        v_palm = mcp - wrist
+        v_finger = tip - mcp
         
         # Dot product formula: cos(theta) = (u . v) / (|u| * |v|)
-        dot_product = np.dot(v_proximal, v_distal)
-        norm_proximal = np.linalg.norm(v_proximal)
-        norm_distal = np.linalg.norm(v_distal)
+        dot_product = np.dot(v_palm, v_finger)
+        norm_palm = np.linalg.norm(v_palm)
+        norm_finger = np.linalg.norm(v_finger)
         
-        denom = norm_proximal * norm_distal
+        denom = norm_palm * norm_finger
         if denom == 0 or np.isnan(denom):
             return 0.0
 
         cos_angle = np.clip(dot_product / denom, -1.0, 1.0)
         angle_deg = np.degrees(np.arccos(cos_angle))
-        return 0.0 if np.isnan(angle_deg) else angle_deg
+
+        if np.isnan(angle_deg):
+            return 0.0
+
+        # Subtract natural baseline rest offset so straight hand maps to 0 deg
+        return max(0.0, float(angle_deg - offset))
 
     def draw_landmarks_on_image(self, annotated_image, detection_result):
         height, width, _ = annotated_image.shape
