@@ -1,6 +1,6 @@
 # Robot Hand
 
-This repository contains the design, CAD models, and control software for a 5-DOF tension-driven robotic hand controlled in real-time using a computer vision webcam tracking pipeline.
+This repository contains the design, CAD models, and control software for a 5-DOF tension-driven robotic hand controlled via live webcam hand tracking.
 
 ## Quick Start Overview
 
